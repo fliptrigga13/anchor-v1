@@ -616,7 +616,8 @@ def p38_cross_bucket_duplicate_while_pending():
 # ------------------------------------------------- P32: sole-caller AST lint
 def p32_sole_caller_lint():
     print("P32 sole-caller AST lint: clean tree passes; rogue invocation "
-          "caught; alias pattern not false-positived")
+          "caught; alias pattern now flagged (v11g SERIOUS-2 supersedes the "
+          "old no-flag expectation)")
     rc, out, err = _run_lint()
     check("P32 lint passes on the clean tree", rc == 0,
           f"rc={rc}, stderr={err[:200]}")
@@ -642,9 +643,15 @@ def p32_sole_caller_lint():
 
     rc3, out3, _ = _run_lint(
         extra_files={"lint_alias_negative_tmp.py": ALIAS_BODY})
-    check("P32 lint does NOT flag the harness alias pattern "
-          "(orig_he(...) plain-name call)",
-          rc3 == 0, f"rc={rc3}, out={out3[-200:]}")
+    # v11g: SERIOUS-2 deliberately raises the bar — a bare
+    # guardian.handle_event reference (alias now, call later/elsewhere)
+    # is a §1.5 violation even when never invoked in this file. The old
+    # "does NOT flag the harness alias pattern" expectation is superseded.
+    check("P32 lint FLAGS the harness alias pattern "
+          "(bare guardian.handle_event reference)",
+          rc3 != 0 and "lint_alias_negative_tmp.py" in out3
+          and "bare .handle_event reference" in out3,
+          f"rc={rc3}, out={out3[-200:]}")
     leftover = [n for n in ("rogue_bypass_probe_tmp.py",
                             "rogue_getattr_probe_tmp.py",
                             "lint_alias_negative_tmp.py")

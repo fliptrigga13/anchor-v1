@@ -108,6 +108,15 @@ residuals carried verbatim from the v11d-critic adjudication:
     L7. HTTP plane: unchanged from prior rounds — http intents DENY
         as unmapped until a namespace extension is specified (documented
         limitation, not a gap).
+    L8. (v11g) Effective ASK→approval TTL is at most one validity-window
+        quantum (300s). approve_intent re-presents the durable ASK-time
+        envelope, and the kernel denies the mint when the approval moment
+        falls outside that envelope's [bucket_start, bucket_start+ttl]
+        window ("presented envelope outside validity window"). An approval
+        arriving ~300s or more after the ASK is therefore DENIED —
+        fail-closed, never fail-open; the pending record itself is not
+        what expires. Fresh-envelope re-issue semantics at approve time
+        are post-launch work.
 
 Run with ./.venv/bin/python from ~/workspace/anchor-v1.
 """
@@ -879,18 +888,26 @@ class DecisionLog:
         self.alerts: list[str] = []
         self.scitt_outage: int = 0           # §5.2 monotonic outage counter
         self._chain_tip = self._CHAIN_GENESIS
+        # v11g (SERIOUS-1): serialize the read-modify-write of _chain_tip
+        # in _append. Lock ordering is fixed: the gateway's per-key locks
+        # are always taken BEFORE _append is entered (never acquired
+        # inside it), so this inner lock cannot deadlock. Created before
+        # _replay() because _replay -> mark_orphaned -> _append.
+        self._append_lock = threading.Lock()
         self._replay()
 
     def _append(self, op: dict) -> None:
-        op = dict(op)
-        op["prev_hash"] = self._chain_tip
-        body = json.dumps(op, sort_keys=True)
-        op["rec_hash"] = hashlib.sha256(body.encode("utf-8")).hexdigest()
-        line = json.dumps(op, sort_keys=True)
-        self._fh.write(line + "\n")
-        self._fh.flush()
-        os.fsync(self._fh.fileno())
-        self._chain_tip = hashlib.sha256(line.encode("utf-8")).hexdigest()
+        with self._append_lock:
+            op = dict(op)
+            op["prev_hash"] = self._chain_tip
+            body = json.dumps(op, sort_keys=True)
+            op["rec_hash"] = hashlib.sha256(body.encode("utf-8")).hexdigest()
+            line = json.dumps(op, sort_keys=True)
+            self._fh.write(line + "\n")
+            self._fh.flush()
+            os.fsync(self._fh.fileno())
+            self._chain_tip = hashlib.sha256(
+                line.encode("utf-8")).hexdigest()
 
     def _replay(self) -> None:
         if not self._path.exists():

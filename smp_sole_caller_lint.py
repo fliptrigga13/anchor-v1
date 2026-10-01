@@ -20,6 +20,15 @@ lint fails the build on:
   3. Indirect invocations via getattr / eval / exec that name either
      method anywhere in scope (including immediately-invoked
      getattr(X, "handle_event")(...)).
+  4. Bare (non-call) references to either method — aliases
+     (he = guardian.handle_event), functools.partial / conditional /
+     decorator arguments, etc. A bare reference is a call-site indirection
+     the pin set cannot see; fail closed. The self./cls. exemption in (1)
+     applies unchanged.
+  5. Constant-string target-name indirections: operator.methodcaller("m"),
+     X.__getattribute__("m") / X.__getattr__("m"), and
+     X.__dict__["m"], where "m" names either method. Computed
+     (non-constant) names remain the documented dataflow limitation.
 
 Scope: the deployment source tree. Skipped (not deployment runtime
 callers under §1.5):
@@ -49,10 +58,13 @@ ALLOW = {"smp_v1_1_prototype.py": "normative §1.5 designated shim layer"}
 # Exact pinned call sites: (relative filename, line number, method name).
 # Update deliberately when the shim's call sites change; both additions
 # and disappearances fail the build.
+# v11g: pins moved 1192/1369/1389 -> 1200/1377/1397 -> 1209/1386/1406 (L8 doc note) (deliberate pin
+# maintenance for the SERIOUS-1 _append-lock line shift; call sites
+# themselves unchanged).
 PINNED_SITES = frozenset({
-    ("smp_v1_1_prototype.py", 1192, "handle_event"),
-    ("smp_v1_1_prototype.py", 1369, "resolve_pending"),
-    ("smp_v1_1_prototype.py", 1389, "resolve_pending"),
+    ("smp_v1_1_prototype.py", 1209, "handle_event"),
+    ("smp_v1_1_prototype.py", 1386, "resolve_pending"),
+    ("smp_v1_1_prototype.py", 1406, "resolve_pending"),
 })
 
 TARGET_ATTRS = ("handle_event", "resolve_pending")
@@ -91,12 +103,16 @@ class _Visitor(ast.NodeVisitor):
         self.rel = rel
         self.sites: list[tuple[int, str]] = []       # (lineno, attr)
         self.indirect: list[tuple[int, str]] = []    # (lineno, detail)
+        self.bare: list[tuple[int, str]] = []        # (lineno, attr)
         # Method-name sets of the lexically enclosing classes, innermost
         # last. A self./cls. call to a target method is internal dispatch
         # (not a deployment caller under §1.5) only when the enclosing
         # class DEFINES that method — the guardian calling itself. A
         # subclass that merely inherits the name is still flagged.
         self._class_methods: list[set[str]] = []
+        # id()s of Attribute nodes already recorded as call funcs, so the
+        # bare-reference pass does not double-report a pinned call site.
+        self._call_attr_ids: set[int] = set()
 
     @staticmethod
     def _getattr_target(node: ast.AST) -> str | None:
@@ -124,11 +140,32 @@ class _Visitor(ast.NodeVisitor):
                 and bool(self._class_methods)
                 and func.attr in self._class_methods[-1])
 
+    @staticmethod
+    def _const_string_target_call(node: ast.Call) -> tuple[str, str] | None:
+        """If node is methodcaller("m", ...), X.__getattribute__("m") or
+        X.__getattr__("m") with "m" a constant target-method name, return
+        (invocation-kind, method). Computed (non-constant) names are the
+        documented dataflow limitation and are NOT flagged."""
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            kind = func.attr
+        elif isinstance(func, ast.Name):
+            kind = func.id
+        else:
+            return None
+        if kind not in ("methodcaller", "__getattribute__", "__getattr__"):
+            return None
+        if (node.args and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value in TARGET_ATTRS):
+            return kind, node.args[0].value
+        return None
+
     def visit_Call(self, node: ast.Call):
         func = node.func
         if isinstance(func, ast.Attribute) and func.attr in TARGET_ATTRS:
             if not self._is_self_call_to_own_method(func):
                 self.sites.append((func.lineno, func.attr))
+                self._call_attr_ids.add(id(func))
         else:
             # getattr indirection: assigned (f = getattr(X, "m")) or
             # immediately invoked (getattr(X, "m")(...)).
@@ -138,14 +175,50 @@ class _Visitor(ast.NodeVisitor):
             if target is not None:
                 self.indirect.append(
                     (node.lineno, f"getattr(..., {target!r})"))
-            elif isinstance(func, ast.Name) and func.id in ("eval", "exec"):
-                for arg in node.args:
-                    if (isinstance(arg, ast.Constant)
-                            and isinstance(arg.value, str)
-                            and any(a in arg.value for a in TARGET_ATTRS)):
-                        self.indirect.append(
-                            (node.lineno,
-                             f"{func.id}() naming a target method"))
+            else:
+                strcall = self._const_string_target_call(node)
+                if strcall is not None:
+                    kind, method = strcall
+                    self.indirect.append(
+                        (node.lineno, f"{kind}(..., {method!r})"))
+                elif (isinstance(func, ast.Name)
+                        and func.id in ("eval", "exec")):
+                    for arg in node.args:
+                        if (isinstance(arg, ast.Constant)
+                                and isinstance(arg.value, str)
+                                and any(a in arg.value
+                                        for a in TARGET_ATTRS)):
+                            self.indirect.append(
+                                (node.lineno,
+                                 f"{func.id}() naming a target method"))
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute):
+        # v11g (SERIOUS-2a): a bare reference to a target method —
+        # alias (he = guardian.handle_event), functools.partial /
+        # conditional / decorator argument — is a call-site indirection
+        # the pin set cannot see. Flag it even when not called here.
+        # The self./cls. internal-dispatch exemption applies unchanged:
+        # only self./cls. where the enclosing class DEFINES the method
+        # is exempt. Call funcs recorded above are skipped by id so a
+        # pinned call site is not double-reported.
+        if (node.attr in TARGET_ATTRS
+                and id(node) not in self._call_attr_ids
+                and not self._is_self_call_to_own_method(node)):
+            self.bare.append((node.lineno, node.attr))
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript):
+        # v11g (SERIOUS-2b): X.__dict__["handle_event"] with a constant
+        # target name, e.g. type(g).__dict__["handle_event"].__get__(g).
+        value = node.value
+        if (isinstance(value, ast.Attribute)
+                and value.attr == "__dict__"
+                and isinstance(node.slice, ast.Constant)
+                and node.slice.value in TARGET_ATTRS):
+            self.indirect.append(
+                (node.lineno,
+                 f"__dict__[{node.slice.value!r}] indirection"))
         self.generic_visit(node)
 
 
@@ -206,6 +279,16 @@ def check_tree(root: Path) -> tuple[list[str], list[tuple[str, int, str]]]:
                     f"{rel}:{lineno}: .{attr}(...) call outside the "
                     f"designated shim — violates normative §1.5 sole-caller "
                     f"invariant")
+        for lineno, attr in visitor.bare:
+            # Bare references are call-site indirections the pin set
+            # cannot see: fail closed everywhere, including the shim
+            # (the pinned call sites are recorded as calls, not bare).
+            where = ("inside the designated shim but outside the pinned "
+                     "call set" if rel in ALLOW
+                     else "outside the designated shim")
+            violations.append(
+                f"{rel}:{lineno}: bare .{attr} reference {where} — "
+                f"violates normative §1.5 sole-caller invariant")
         for lineno, detail in visitor.indirect:
             violations.append(
                 f"{rel}:{lineno}: indirect target-method invocation "

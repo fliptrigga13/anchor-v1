@@ -136,7 +136,7 @@ try:
     expect_fail("V11F-C5", "v11f_c5.py",
                 'getattr(__import__("mod"), "handle_event")(ev)\n',
                 "getattr")
-    # computed / aliased / indirect forms are EXPECTED to pass lint
+    # computed / dynamically-aliased forms are EXPECTED to pass lint
     # (accepted L9 limitation: dataflow analysis out of scope)
     expect_pass("V11F-C6", "v11f_c6.py",
                 'getattr(g, "handle_" + "event")(ev)\n')
@@ -144,8 +144,12 @@ try:
                 'ga = getattr\nga(g, "handle_event")(ev)\n')
     expect_pass("V11F-C8", "v11f_c8.py",
                 'eval("g." + "handle_event" + "(ev)")\n')
-    expect_pass("V11F-C9", "v11f_c9.py",
-                'h = g.handle_event\nh(ev)\n')
+    # v11g supersedes the L9 accepted limitation for BARE ALIASES: the
+    # SERIOUS-2 fix now fails the lint on bare target-method references
+    # (he = guardian.handle_event), so C9 is caught, not passed.
+    expect_fail("V11F-C9", "v11f_c9.py",
+                'h = g.handle_event\nh(ev)\n',
+                "bare .handle_event reference")
     expect_pass("V11F-C10", "v11f_c10.py",
                 'm = "handle_event"\ngetattr(g, m)(ev)\n')
     cleanup()
@@ -160,16 +164,16 @@ try:
         rc, out = lint(tmp)
         check("V11F-D0 baseline isolated copy passes", rc == 0,
               f"rc={rc}")
-        # D1: remove the pinned 1192 call (replace line, keep line count)
+        # D1: remove the pinned 1200 call (replace line, keep line count)
         lines = shim.read_text(encoding="utf-8").splitlines(keepends=True)
-        assert "handle_event" in lines[1191], lines[1191]
-        lines[1191] = "                # REMOVED-BY-V11F-D1\n"
+        assert "handle_event" in lines[1208], lines[1208]
+        lines[1208] = "                # REMOVED-BY-V11F-D1\n"
         shim.write_text("".join(lines), encoding="utf-8")
         rc, out = lint(tmp)
         check("V11F-D1 removed pin fails naming site",
-              rc == 1 and "smp_v1_1_prototype.py:1192" in out
+              rc == 1 and "smp_v1_1_prototype.py:1209" in out
               and "not found" in out,
-              f"rc={rc} :: {[l for l in out.splitlines() if '1192' in l]}")
+              f"rc={rc} :: {[l for l in out.splitlines() if '1209' in l]}")
         # D2: restore, then ADD an unpinned call site at end of file
         shim.write_text(shim_src.read_text(encoding="utf-8"),
                         encoding="utf-8")
@@ -190,8 +194,8 @@ try:
     check("V11F-E1 clean tree rc=0", rc == 0, f"rc={rc}")
     check("V11F-E2 exactly 3 pinned sites", len(allowed) == 3,
           f"pins={allowed}")
-    check("V11F-E3 pinned sites are 1192/1369/1389",
-          all(f":{n} " in " ".join(allowed) for n in (1192, 1369, 1389)),
+    check("V11F-E3 pinned sites are 1209/1386/1406",
+          all(f":{n} " in " ".join(allowed) for n in (1209, 1386, 1406)),
           f"pins={allowed}")
     # zero stray v11f files remain in the tree. The shipped
     # v11f_critic_probes.py is a legitimate repo file (not a stray);

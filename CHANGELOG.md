@@ -4,6 +4,60 @@ Built 2026-09-23 in a single day by an agent swarm (coordinator + per-capability
 builders + independent verifier + red team). Every wave gated on: full suite
 green, adversarial harness >= 95% pass with 0 fail, baseline never regressing.
 
+## v1.1.1 — SMP hardening: WAL concurrency fix, lint indirection coverage, documented ASK TTL (2026-10-01)
+
+Fixes the 3 SERIOUS findings from the post-v1.1.0 adversarial re-adjudication
+(lock re-opened per protocol, re-verified, lock closed). Zero kernel edits —
+all changes are repo-root shim/lint/docs; no file under `src/` was modified.
+
+- **SERIOUS-1 — WAL race (availability kill), FIXED.** `DecisionLog._append`
+  had no lock: concurrent `submit_intent` calls with distinct dedup keys
+  raced on the `_chain_tip` read-modify-write, and the next restart refused
+  with WAL INTEGRITY FAILURE (reproduced pre-fix: 120 threads × distinct
+  intents → replay refused, "hash chain broken at line 2"; minimal 2-thread
+  `_append` race failed 18/40 rounds). Fix: one `threading.Lock`
+  (`_append_lock`) held around the `_append` body. Lock ordering audited:
+  the gateway's per-key locks are always taken BEFORE `_append` is entered
+  and never acquired inside it — no reverse path, no deadlock. Post-fix:
+  120-thread × distinct-intent restart replays clean (120/120 chained),
+  40/40 direct-race rounds intact.
+- **SERIOUS-2 — sole-caller lint evasions, FIXED.** The lint now also flags
+  (a) bare (non-call) `Attribute` references to the target method names
+  (`handle_event`, `resolve_pending`) — aliases (`he = guardian.handle_event`),
+  `functools.partial` / conditional-expression arguments — and (b)
+  `operator.methodcaller("m")`, `X.__getattribute__("m")` / `X.__getattr__("m")`,
+  and `X.__dict__["m"]` with constant-string target names. The `self.`/`cls.`
+  exemption (enclosing class DEFINES the method) is unchanged — the kernel's
+  internal dispatch still passes. All 7 reported evasion shapes now fail the
+  lint (verified: each evaded pre-fix, each caught post-fix). Pin maintenance:
+  the shim's 3 pinned call sites moved 1192/1369/1389 → 1209/1386/1406
+  (line shifts from the `_append`-lock edit + the L8 doc note; call sites
+  themselves unchanged); the lint still reports exactly 3 pinned sites, rc=0.
+- **SERIOUS-3 — ASK→approval TTL, DOCUMENTED (no behavior change tonight).**
+  `approve_intent` re-presents the durable ASK-time envelope, and the kernel
+  denies the mint when the approval moment falls outside that envelope's
+  `[bucket_start, bucket_start+ttl]` window ("presented envelope outside
+  validity window"). Effective ASK→approval TTL is therefore at most one
+  300s window quantum — an approval ~300s+ after the ASK is DENIED
+  (fail-closed, never fail-open). Recorded as documented limitation L8 in
+  the shim module docstring. Fresh-envelope re-issue semantics at approve
+  time are post-launch work.
+- **Proof (re-verified against the merged tree, all green):** 7/7 new
+  lint-evasion probes caught; S4 120-thread WAL race clean; M1 40/40 race
+  rounds intact; v11f 23/23 still caught (C9 re-based to the raised bar:
+  bare aliases are now violations, superseding the old L9 note); four
+  adversarial suites 68/68 (v11e critic) + 29/29 (v11e remediation) +
+  63/63 (v11d) + 171/171 (v11r) = **331/331**; sole-caller lint rc=0 with
+  exactly 3 pinned sites; kernel pytest 1081 passed, 1 xfailed, 1 failed —
+  the single failure is the known pre-existing
+  `test_wave9_gapfill_store.py::TestStalenessDuals::test_capability_with_zero_staleness_accepts_immediate_sync`
+  (reproduces on the pristine pre-merge base).
+- **Known gap (unchanged from v1.1.0):** `.github/workflows/smp-sole-caller-lint.yml`
+  is not present in the repo, so the CI claim in the v1.1.0 notes refers to a
+  workflow file that was never added; the token also lacks `workflow` scope
+  for pushing workflow paths via API. The lint itself is verified green by
+  the probe suites above.
+
 ## Wave 0 — Hardened ACS Guardian (`acs_guardian.py`)
 Full hook coverage (allow/deny/modify/ask/defer), HMAC wire auth with nonce
 registry, fail-closed on all error modes, every ALLOW/MODIFY mints a one-use
