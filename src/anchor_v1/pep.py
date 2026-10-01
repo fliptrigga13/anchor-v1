@@ -31,6 +31,8 @@ unreadable from the caller side.
 """
 
 from __future__ import annotations
+import sys
+import shutil
 
 import os
 import subprocess
@@ -187,9 +189,14 @@ class ShellPEP:
         # the child process environment it spawns.
         child_env = dict(os.environ)
         child_env.update(self._broker._brokered_env())
+        run_argv = list(argv)
+        if sys.platform == "win32" and shutil.which(argv[0]) is None:
+            # Builtins like echo require cmd.exe on Windows while keeping shell=False
+            comspec = os.environ.get("COMSPEC", "cmd.exe")
+            run_argv = [comspec, "/c"] + run_argv
         try:
             return subprocess.run(
-                argv,
+                run_argv,
                 env=child_env,
                 capture_output=True,
                 text=True,

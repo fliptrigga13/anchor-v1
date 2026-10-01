@@ -211,3 +211,9 @@ tests (all in `tests/test_authority.py`):
   model values (`{c1, c2, c3}`) on a minimal spec: symmetry applies
   correctly. The spec's cfgs still use strings, so symmetry is not
   currently enabled; converting is future work for the 3-id model.
+
+  **2026-09-27:** Both `authority.cfg` and `authority-small.cfg` converted
+  to model-value constants (`{c1, c2, c3}` and `{c1, c2}` respectively)
+  and given `SYMMETRY IdPermutation`, `SYMMETRY EffectsPermutation`, and
+  `SYMMETRY HoldersPermutation` entries. TLC can now use symmetry reduction
+  on both configs; the 3-id model requires Java to run.

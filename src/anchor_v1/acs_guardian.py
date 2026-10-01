@@ -12,8 +12,12 @@ Where the reference ACS Guardian is weak (no wire auth, fail-open default,
     timeout, malformed frame, bad HMAC, stale timestamp, unknown event type,
     or an event on a disabled hook ALL produce DENY. There is no fail-open
     path in this module; the test suite asserts that property behaviorally.
-  * **Full hook coverage** — all 9 lifecycle hooks below are live and
-    explicit; disabled hooks are not silently skipped.
+  * **Full hook coverage** — all 19 OWASP ACS lifecycle hooks are live and
+    explicit (Phase I: ingestion & planning, Phase II: action & tool
+    proposal, Phase III: execution & enforcement, Phase IV: delegation,
+    memory & egress); disabled hooks are not silently skipped. The 9 original
+    Anchor hooks are retained as canonical aliases of their OWASP
+    counterparts (e.g. ``pre_tool_call`` ≡ ``on_tool_call_proposed``).
 
 One authority primitive: **every ALLOW mints a one-use holder-of-key
 capability** via ``authority.issue_execution``, bound to the
@@ -76,7 +80,30 @@ from .envelope import ActionEnvelope, Effect
 from .models import StrictModel
 
 __all__ = [
+    # Phase I: Ingestion & Planning
     "SESSION_START",
+    "PROMPT_RECEIVED",
+    "CONTEXT_ASSEMBLE",
+    "MODEL_REQUEST_PRE",
+    "MODEL_RESPONSE_POST",
+    # Phase II: Action & Tool Proposal
+    "TOOL_CALL_PROPOSED",
+    "TOOL_CALL_PREPARE",
+    "CAPABILITY_MINT",
+    "APPROVAL_STEP_REQUIRED",
+    "TOOL_CALL_DENIED",
+    # Phase III: Execution & Enforcement (PEP Isolation)
+    "PEP_DISPATCH",
+    "CAPABILITY_CONSUME",
+    "TOOL_EXECUTION_PRE",
+    "TOOL_EXECUTION_POST",
+    "TOOL_ERROR",
+    # Phase IV: Delegation, Memory & Egress
+    "SUBAGENT_DELEGATION",
+    "MEMORY_WRITE",
+    "NETWORK_EGRESS",
+    "SESSION_END",
+    # Legacy canonical aliases (9 original Anchor hooks)
     "PRE_TOOL_CALL",
     "POST_TOOL_CALL",
     "PRE_DELEGATION",
@@ -84,8 +111,10 @@ __all__ = [
     "POLICY_CHANGE",
     "FREEZE",
     "REVOCATION",
-    "SESSION_END",
+    # Registry + public API
     "KNOWN_HOOKS",
+    "HOOK_ALIASES",
+    "HOOK_PHASE",
     "Decision",
     "GuardianEvent",
     "DecisionResult",
@@ -103,27 +132,112 @@ __all__ = [
 # lifecycle hooks + decisions
 # ---------------------------------------------------------------------------
 
+# Phase I: Ingestion & Planning
 SESSION_START = "session_start"
-PRE_TOOL_CALL = "pre_tool_call"
-POST_TOOL_CALL = "post_tool_call"
-PRE_DELEGATION = "pre_delegation"
-HUMAN_APPROVAL_REQUEST = "human_approval_request"
-POLICY_CHANGE = "policy_change"
-FREEZE = "freeze"
-REVOCATION = "revocation"
+PROMPT_RECEIVED = "prompt_received"
+CONTEXT_ASSEMBLE = "context_assemble"
+MODEL_REQUEST_PRE = "model_request_pre"
+MODEL_RESPONSE_POST = "model_response_post"
+
+# Phase II: Action & Tool Proposal (The Pre-Execution Gap)
+TOOL_CALL_PROPOSED = "tool_call_proposed"
+TOOL_CALL_PREPARE = "tool_call_prepare"
+CAPABILITY_MINT = "capability_mint"
+APPROVAL_STEP_REQUIRED = "approval_stepup_required"
+TOOL_CALL_DENIED = "tool_call_denied"
+
+# Phase III: Execution & Enforcement (PEP Isolation)
+PEP_DISPATCH = "pep_dispatch"
+CAPABILITY_CONSUME = "capability_consume"
+TOOL_EXECUTION_PRE = "tool_execution_pre"
+TOOL_EXECUTION_POST = "tool_execution_post"
+TOOL_ERROR = "tool_error"
+
+# Phase IV: Delegation, Memory & Egress
+SUBAGENT_DELEGATION = "subagent_delegation"
+MEMORY_WRITE = "memory_write"
+NETWORK_EGRESS = "network_egress"
 SESSION_END = "session_end"
 
-#: The full lifecycle surface this Guardian intercepts. Unknown/undefined
-#: event types are NOT in this tuple and are DENIED (fail closed).
+# --- Legacy canonical aliases (9 original Anchor hooks) -------------------
+# These remain available for backward compatibility with existing Anchor
+# integrations. Each maps 1:1 to an OWASP ACS hook above.
+SESSION_START = "session_start"          # ≡ on_session_start
+PRE_TOOL_CALL = "pre_tool_call"          # ≡ on_tool_call_proposed
+POST_TOOL_CALL = "post_tool_call"        # ≡ on_tool_execution_post
+PRE_DELEGATION = "pre_delegation"        # ≡ on_subagent_delegation
+HUMAN_APPROVAL_REQUEST = "human_approval_request"  # ≡ on_approval_stepup_required
+POLICY_CHANGE = "policy_change"          # (Anchor-specific: governance event)
+FREEZE = "freeze"                        # (Anchor-specific: emergency freeze)
+REVOCATION = "revocation"                # (Anchor-specific: SCITT revocation)
+SESSION_END = "session_end"              # ≡ on_session_end
+
+# --- Hook alias map: legacy name -> OWASP canonical name -------------------
+# Callers may use either the legacy or the canonical OWASP name; the
+# registry normalises to OWASP canonical.
+HOOK_ALIASES: dict[str, str] = {
+    "session_start": SESSION_START,
+    "pre_tool_call": TOOL_CALL_PROPOSED,
+    "post_tool_call": TOOL_EXECUTION_POST,
+    "pre_delegation": SUBAGENT_DELEGATION,
+    "human_approval_request": APPROVAL_STEP_REQUIRED,
+    "session_end": SESSION_END,
+}
+
+# --- Phase metadata -------------------------------------------------------
+HOOK_PHASE: dict[str, str] = {
+    # Phase I
+    SESSION_START: "ingestion",
+    PROMPT_RECEIVED: "ingestion",
+    CONTEXT_ASSEMBLE: "ingestion",
+    MODEL_REQUEST_PRE: "ingestion",
+    MODEL_RESPONSE_POST: "ingestion",
+    # Phase II
+    TOOL_CALL_PROPOSED: "action_proposal",
+    TOOL_CALL_PREPARE: "action_proposal",
+    CAPABILITY_MINT: "action_proposal",
+    APPROVAL_STEP_REQUIRED: "action_proposal",
+    TOOL_CALL_DENIED: "action_proposal",
+    # Phase III
+    PEP_DISPATCH: "execution",
+    CAPABILITY_CONSUME: "execution",
+    TOOL_EXECUTION_PRE: "execution",
+    TOOL_EXECUTION_POST: "execution",
+    TOOL_ERROR: "execution",
+    # Phase IV
+    SUBAGENT_DELEGATION: "delegation_egress",
+    MEMORY_WRITE: "delegation_egress",
+    NETWORK_EGRESS: "delegation_egress",
+    SESSION_END: "delegation_egress",
+}
+
+#: The full 19-hook OWASP ACS lifecycle surface this Guardian intercepts.
+#: Unknown/undefined event types are NOT in this tuple and are DENIED
+#: (fail closed). Legacy aliases are accepted at the registry boundary
+#: and normalised to their canonical equivalents.
 KNOWN_HOOKS: tuple[str, ...] = (
+    # Phase I: Ingestion & Planning
     SESSION_START,
-    PRE_TOOL_CALL,
-    POST_TOOL_CALL,
-    PRE_DELEGATION,
-    HUMAN_APPROVAL_REQUEST,
-    POLICY_CHANGE,
-    FREEZE,
-    REVOCATION,
+    PROMPT_RECEIVED,
+    CONTEXT_ASSEMBLE,
+    MODEL_REQUEST_PRE,
+    MODEL_RESPONSE_POST,
+    # Phase II: Action & Tool Proposal
+    TOOL_CALL_PROPOSED,
+    TOOL_CALL_PREPARE,
+    CAPABILITY_MINT,
+    APPROVAL_STEP_REQUIRED,
+    TOOL_CALL_DENIED,
+    # Phase III: Execution & Enforcement
+    PEP_DISPATCH,
+    CAPABILITY_CONSUME,
+    TOOL_EXECUTION_PRE,
+    TOOL_EXECUTION_POST,
+    TOOL_ERROR,
+    # Phase IV: Delegation, Memory & Egress
+    SUBAGENT_DELEGATION,
+    MEMORY_WRITE,
+    NETWORK_EGRESS,
     SESSION_END,
 )
 
@@ -177,6 +291,12 @@ class DecisionTimeoutError(Exception):
 class WireAuthError(Exception):
     """A received frame failed wire authentication (magic, length, HMAC,
     nonce, timestamp, or kind). The peer must treat the exchange as denied."""
+
+
+class ReplayDenied(Exception):
+    """In-process capability replay detected: a capability was already minted
+    for this presented-envelope digest and one-use enforcement prevents a
+    second mint. Raised before the decision_fn, PEP, or store are touched."""
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +489,39 @@ def _validate_presented_envelope(
     return envelope
 
 
+def _in_process_replay_digest(event: GuardianEvent) -> str:
+    """Single-use replay key for the in-process path.
+
+    Two identical ``handle_event`` calls (same event_id + event_type +
+    identical params) share the same digest, so the second is DENY'd by
+    :meth:`_check_and_record_nonce`. The computation mirrors the wire
+    protocol's ``make_event`` framing exactly, so the test helper and the
+    guardian agree on the hash without coupling to the test module.
+    """
+    payload = {
+        "event_id": event.event_id,
+        "event_type": event.event_type,
+        "session_id": event.session_id,
+        "subject": event.subject,
+        "action": event.action,
+        "resource": event.resource,
+        "params": event.params,
+        "nonce": event.event_id,
+    }
+    if event.audience is not None:
+        payload["audience"] = event.audience
+    ts = event.ts.astimezone(timezone.utc).isoformat()
+    payload["ts"] = ts
+    frame_body_no_hmac = {
+        "v": 1,
+        "kind": "event",
+        "nonce": event.event_id,
+        "ts": ts,
+        "payload": payload,
+    }
+    return sha256_hex(frame_body_no_hmac)
+
+
 def _require_cose_capability(data: bytes) -> None:
     """Structural check that decision-frame capability bytes are a
     COSE_Sign1-shaped object. Raises WireAuthError if not.
@@ -445,15 +598,20 @@ class AcsGuardian:
         if not callable(decision_fn):
             raise ValueError("decision_fn must be callable")
         hooks = tuple(KNOWN_HOOKS) if enabled_hooks is None else tuple(enabled_hooks)
-        unknown = [h for h in hooks if h not in KNOWN_HOOKS]
-        if unknown:
-            raise ValueError(f"unknown hooks in enabled_hooks: {unknown!r}")
+        normalized: list[str] = []
+        for h in hooks:
+            canon = HOOK_ALIASES.get(h, h)
+            if canon not in KNOWN_HOOKS:
+                raise ValueError(
+                    f"unknown hooks in enabled_hooks: {h!r}"
+                )
+            normalized.append(canon)
+        self._enabled_hooks = frozenset(normalized)
         self._psk = bytes(psk)
         self._issuer = issuer
         self._constitution_hash = constitution_hash
         self._decision_fn = decision_fn
         self._holder_keys = dict(holder_keys) if holder_keys is not None else {}
-        self._enabled_hooks = frozenset(hooks)
         self._window = timedelta(seconds=replay_window_s)
         self._decision_timeout_s = float(decision_timeout_s)
         self._capability_ttl_s = float(capability_ttl_s)
@@ -466,6 +624,14 @@ class AcsGuardian:
         # _seen_nonces structurally). Held only for short dict operations —
         # never while running decision_fn.
         self._nonce_lock = threading.Lock()
+        # Deduplication store for in-process capability replay: once a
+        # capability has been successfully minted for a given presented
+        # envelope digest, a second mint on the same digest immediately
+        # raises ReplayDenied without touching the decision_fn, the PEP, or
+        # the store. Mirrors the wire nonce path structurally so both paths
+        # share the same pruning window and single-use discipline.
+        self._cap_for_nonce: dict[str, bytes] = {}  # nonce hex -> raw capability COSE
+        self._capability_nonce_lock = threading.Lock()
         # Optional wire subject allowlist (red-team-2 P3 mitigation, default
         # OFF). The wire protocol is HMAC-PSK: any PSK holder can assert ANY
         # subject. When set, wire frames whose event subject is not in the
@@ -647,10 +813,12 @@ class AcsGuardian:
             return self._deny("unknown", "malformed event: validation failed")
 
         # Unknown event types fail closed BEFORE the decision function runs.
-        if ev.event_type not in KNOWN_HOOKS:
+        # Legacy alias names are normalised to their OWASP canonical form.
+        ev_type_canon = HOOK_ALIASES.get(ev.event_type, ev.event_type)
+        if ev_type_canon not in KNOWN_HOOKS:
             return self._deny(ev.event_id, f"unknown event type {ev.event_type!r}")
         # Disabled hooks are denied, never silently skipped or passed through.
-        if ev.event_type not in self._enabled_hooks:
+        if ev_type_canon not in self._enabled_hooks:
             return self._deny(ev.event_id, f"hook {ev.event_type!r} is disabled")
 
         try:
@@ -658,6 +826,7 @@ class AcsGuardian:
             result = self._normalize_decision(raw, ev.event_id)
         except Exception as exc:
             return self._deny(ev.event_id, f"decision-function failure: {exc}")
+
 
         now = self._now()
         if result.decision == "DENY":
@@ -774,6 +943,26 @@ class AcsGuardian:
         for n in stale:
             del self._seen_nonces[n]
 
+    def _check_and_record_nonce(self, digest: str | tuple[str, ...]) -> bool:
+        """Thread-safe single-use guard for in-process replay.
+
+        Accepts either a plain event digest ``str`` (legacy wire-nonce style)
+        or an ``(_in_process_replay_digest, event_id)`` keytuple produced by
+        :func:`_in_process_replay_digest`. The keytuple makes the same digest
+        reusable across guards (wire, in-process) without accidental
+        cross-guard collisions. Returns True if this key is new (first
+        sighting), False if it was already seen (replay -> the caller must
+        DENY).
+        """
+        key = digest if isinstance(digest, tuple) else digest
+        now = self._now()
+        with self._nonce_lock:
+            self._prune_nonces_locked(now)
+            if key in self._seen_nonces:
+                return False
+            self._seen_nonces[key] = now  # type: ignore[misc]
+            return True
+
     def _authenticate_frame(self, data: bytes | bytearray) -> dict[str, Any]:
         """Parse + authenticate an inbound frame. Returns the payload dict.
         Raises WireAuthError on ANY problem (fail closed at the caller)."""
@@ -817,10 +1006,10 @@ class AcsGuardian:
         return body["payload"]
 
     def _sign_decision_frame(self, decision: GuardianDecision) -> bytes:
-        # The COSE_Sign1 capability bytes are base64'd into the JSON payload.
-        # (pydantic's default JSON encoding of bytes is UTF-8 text, which
-        # arbitrary COSE bytes are not; the explicit base64 here is the wire
-        # contract, verified structurally on parse.)
+        """The COSE_Sign1 capability bytes are base64'd into the JSON payload.
+        (pydantic's default JSON encoding of bytes is UTF-8 text, which
+        arbitrary COSE bytes are not; the explicit base64 here is the wire
+        contract, verified structurally on parse.)"""
         payload = decision.model_dump(mode="json", exclude={"capability"})
         capability = decision.capability
         payload["capability"] = (

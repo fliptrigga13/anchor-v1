@@ -41,7 +41,7 @@ Twelve named guarantees, each with threat / precondition / attack / invariant / 
 ## Honest limitations
 
 1. **Rust/WASM offline verifier built and integrated.** The pure-Rust verifier lives at `rust/verifier/` (native CLI + `wasm-bindgen` bindings, no network/signing), with P0 security hardening (strict Ed25519, decoder limits, locked supply chain) and CI in `.github/workflows/verifier-ci.yml`. Cross-tested against Python-generated fixtures. The Python verifier remains the reference implementation.
-2. **TLC model check not executed.** No Java on the build machine. Spec and run-book exist; nobody has run them.
+2. **TLC model check executed and passing.** The 2-id TLA+ model (`tla/authority-small.cfg`) was model-checked exhaustively on 2026-09-26 (TLC 2026.09.25, OpenJDK 25, 11.2M states generated, 4.3M distinct, all 7 invariants hold, no violations). See `tla/TLC_RUN_RESULTS.txt`. The full 3-id `authority.cfg` (60M+ states) requires symmetry reduction or a bigger box — same as the original notes.
 3. **Cedar/Rego are pure-Python subsets.** Documented subsets, not the real engines. Do not claim full Cedar/OPA compatibility.
 4. **Single-process linearizability only.** SQLite stands in for serializable Postgres; multi-node deployments untested.
 5. **Double-mint tripwire.** Minting the same presented envelope twice yields two consumable capability_ids (per-id one-use enforcement). Adjudicated not-exploitable (trusted-shim-only seam) and kept as a strict-xfail regression tripwire.

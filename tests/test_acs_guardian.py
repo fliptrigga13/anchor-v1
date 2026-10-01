@@ -222,17 +222,45 @@ def pep_attempt(store, payload, decision, holder_signer, issuer, *, challenge, e
 
 def test_known_hooks_cover_full_lifecycle():
     assert set(KNOWN_HOOKS) == {
+        # Phase I: Ingestion & Planning
         "session_start",
-        "pre_tool_call",
-        "post_tool_call",
-        "pre_delegation",
-        "human_approval_request",
-        "policy_change",
-        "freeze",
-        "revocation",
+        "prompt_received",
+        "context_assemble",
+        "model_request_pre",
+        "model_response_post",
+        # Phase II: Action & Tool Proposal
+        "tool_call_proposed",
+        "tool_call_prepare",
+        "capability_mint",
+        "approval_stepup_required",
+        "tool_call_denied",
+        # Phase III: Execution & Enforcement
+        "pep_dispatch",
+        "capability_consume",
+        "tool_execution_pre",
+        "tool_execution_post",
+        "tool_error",
+        # Phase IV: Delegation, Memory & Egress
+        "subagent_delegation",
+        "memory_write",
+        "network_egress",
         "session_end",
     }
-    assert len(KNOWN_HOOKS) == 9
+    assert len(KNOWN_HOOKS) == 19
+
+
+def test_legacy_hook_aliases_normalize_to_canonical():
+    """The 9 original Anchor hook names are accepted as aliases and
+    normalised to their OWASP ACS canonical equivalents at the registry
+    boundary."""
+    from anchor_v1.acs_guardian import HOOK_ALIASES, KNOWN_HOOKS
+    for legacy, canonical in HOOK_ALIASES.items():
+        assert canonical in KNOWN_HOOKS, f"alias {legacy!r} -> {canonical!r} not canonical"
+    # spot-check the critical mappings
+    assert HOOK_ALIASES["pre_tool_call"] == "tool_call_proposed"
+    assert HOOK_ALIASES["post_tool_call"] == "tool_execution_post"
+    assert HOOK_ALIASES["pre_delegation"] == "subagent_delegation"
+    assert HOOK_ALIASES["human_approval_request"] == "approval_stepup_required"
 
 
 @pytest.mark.parametrize("hook", KNOWN_HOOKS)
@@ -280,9 +308,9 @@ def test_disabled_hook_denied_not_passed_through(issuer, holder, now_fn):
         called.append(event)
         return "ALLOW"
 
-    enabled = [h for h in KNOWN_HOOKS if h != "pre_tool_call"]
+    enabled = [h for h in KNOWN_HOOKS if h != "tool_call_proposed"]
     guardian = make_guardian(issuer, now_fn, decision_fn=spy, enabled_hooks=enabled)
-    decision = guardian.handle_event(make_event(holder, event_type="pre_tool_call"))
+    decision = guardian.handle_event(make_event(holder, event_type="tool_call_proposed"))
     assert decision.decision == "DENY"
     assert decision.capability is None
     assert "disabled" in decision.reason

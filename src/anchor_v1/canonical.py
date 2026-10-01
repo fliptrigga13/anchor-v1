@@ -12,6 +12,8 @@ def _jsonable(value: Any) -> Any:
 
 
 def canonical_bytes(value: Any) -> bytes:
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
     return json.dumps(
         _jsonable(value),
         sort_keys=True,
