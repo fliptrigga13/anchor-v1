@@ -1,0 +1,54 @@
+{
+  "payload": {
+    "registry_version": "2026-09-23-r1",
+    "owner": {
+      "keyid": "deploy/registry-owner-01",
+      "spiffe_id": "spiffe://deploy/registry-owner"
+    },
+    "issued_at": "2026-09-23T23:37:10.938396+00:00",
+    "entries": [
+      {
+        "entry_id": "e001",
+        "plane": "shell",
+        "qualified_verb": "anchor:shell/exec",
+        "target_shape": {
+          "kind": "exact",
+          "value": "/usr/bin/backup"
+        },
+        "presented_verb": "anchor:shell/exec",
+        "acs_action": "anchor:acs/backup.run",
+        "acs_resource": "backup:host-a"
+      },
+      {
+        "entry_id": "e002",
+        "plane": "shell",
+        "qualified_verb": "anchor:shell/backup-ask",
+        "target_shape": {
+          "kind": "exact",
+          "value": "/usr/bin/backup-ask"
+        },
+        "presented_verb": "anchor:shell/backup-ask",
+        "acs_action": "anchor:acs/backup.ask",
+        "acs_resource": "backup:host-a"
+      },
+      {
+        "entry_id": "e003",
+        "plane": "shell",
+        "qualified_verb": "anchor:shell/read",
+        "target_shape": {
+          "kind": "prefix",
+          "value": "/var/log/"
+        },
+        "presented_verb": "anchor:shell/read",
+        "acs_action": "anchor:acs/log.read",
+        "acs_resource": "logs:host-a"
+      }
+    ]
+  },
+  "signature": {
+    "key_id": "deploy/registry-owner-01",
+    "alg": "EdDSA",
+    "sig": "eeba1cc8567913f84b09a2e98b9019094bd1d51e9f698c4c3b1ee7645589979e73c4ee1283b9de9d70f7d1a3a5d072c2ec5c61a450a65914f5a64a7d87ec3a04",
+    "payload_hash_sha256": "2196094538676eda15bcd1c2f91af303d6d93ac11dd4a7fec5b2e0fc7fa0dee6"
+  }
+}

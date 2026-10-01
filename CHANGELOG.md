@@ -114,3 +114,42 @@ Ubuntu, Python 3.12, SBOM pins (`cryptography==50.0.1`, `pydantic==2.13.5`,
 `pytest==9.1.1`). Collected-test floor 1044, then `pytest -q`. Local run
 on Python 3.12.14 (aarch64): `1043 passed, 1 xfailed`. The workflow does
 not run mutation checks, the adversary harness, or TLC.
+
+## v1.1.0 — Seam Mapping Provider (SMP) (2026-10-01)
+
+Closes the P5 cross-plane seam (see `docs/THREAT_MODEL.md` item 12): the
+deployment shim `smp_v1_1_prototype.py` maps plane-native tool calls to the
+kernel's canonical `ActionEnvelope` namespace via a pinned registry
+(`smp-registry-v1.json` + `smp-registry-v1.pin`), with the deployment
+`SmpGateway` as the sole deployment caller of
+`AcsGuardian.handle_event` / `resolve_pending` (normative §1.5).
+
+- **Zero kernel edits.** The shim is a deployment-layer wrapper; no file
+  under `src/` was modified for v1.1.
+- **Proof:** four adversarial probe suites re-run green against the merged
+  tree — 68/68 (v11e critic) + 29/29 (v11e remediation) + 63/63 (v11d)
+  + 171/171 (v11r) = **331/331**; plus 23/23 independent sole-caller lint
+  attacks (v11f) still caught after the merge adaptations.
+- **CI enforcement:** `.github/workflows/smp-sole-caller-lint.yml` runs
+  `smp_sole_caller_lint.py --root .` on push to `anchor-v1` and on pull
+  requests. The lint pins the shim's exact call sites (3 pins), fails on
+  any unpinned/additional call, any indirect invocation via
+  getattr/eval/exec, and any missing pin; the kernel's own tests, the
+  reality-trial harness, and the named probe fixtures are excluded as
+  documented non-deployment fixtures. Merge adaptations: (1) a
+  `self.`/`cls.` call is not recorded when the enclosing class DEFINES
+  the method (the guardian calling itself is internal dispatch, not a
+  deployment caller); (2) nested-repo detection only counts repos
+  strictly below the scan root (scanning a repo working tree previously
+  skipped every file).
+- **Accepted residuals L1–L9** (documented limitations, not gaps):
+  bucket-boundary adjacent-bucket mint; cross-process double mint; SCITT
+  genesis restart/re-emission; unbounded dedup maps; no
+  caller-to-principal authentication; shim code execution is total
+  compromise; HTTP deliberately out of scope (denies as unmapped until a
+  namespace extension exists); WAL chain tamper-evident, not
+  MAC-protected; dynamically constructed method names can evade the AST
+  lint.
+- Kernel suite at merge: 1073 passed, 1 xfailed; 1 pre-existing failure
+  (`test_wave9_gapfill_store.py::TestStalenessDuals::test_capability_with_zero_staleness_accepts_immediate_sync`)
+  reproduces identically on the pristine pre-merge base — unrelated to v1.1.
