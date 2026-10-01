@@ -164,16 +164,19 @@ try:
         rc, out = lint(tmp)
         check("V11F-D0 baseline isolated copy passes", rc == 0,
               f"rc={rc}")
-        # D1: remove the pinned 1200 call (replace line, keep line count)
+        # D1: remove the pinned 1827 call (replace line, keep line count).
+        # harden-B: pin moved 1209 -> 1827 (cross-process xproc_section
+        # extraction line shift; call site itself unchanged). Scratch-only
+        # probe maintenance.
         lines = shim.read_text(encoding="utf-8").splitlines(keepends=True)
-        assert "handle_event" in lines[1208], lines[1208]
-        lines[1208] = "                # REMOVED-BY-V11F-D1\n"
+        assert "handle_event" in lines[1826], lines[1826]
+        lines[1826] = "                # REMOVED-BY-V11F-D1\n"
         shim.write_text("".join(lines), encoding="utf-8")
         rc, out = lint(tmp)
         check("V11F-D1 removed pin fails naming site",
-              rc == 1 and "smp_v1_1_prototype.py:1209" in out
+              rc == 1 and "smp_v1_1_prototype.py:1827" in out
               and "not found" in out,
-              f"rc={rc} :: {[l for l in out.splitlines() if '1209' in l]}")
+              f"rc={rc} :: {[l for l in out.splitlines() if '1827' in l]}")
         # D2: restore, then ADD an unpinned call site at end of file
         shim.write_text(shim_src.read_text(encoding="utf-8"),
                         encoding="utf-8")
@@ -194,8 +197,11 @@ try:
     check("V11F-E1 clean tree rc=0", rc == 0, f"rc={rc}")
     check("V11F-E2 exactly 3 pinned sites", len(allowed) == 3,
           f"pins={allowed}")
-    check("V11F-E3 pinned sites are 1209/1386/1406",
-          all(f":{n} " in " ".join(allowed) for n in (1209, 1386, 1406)),
+    # harden-B: pins moved 1209/1386/1406 -> 1827/2056/2078 (cross-process
+    # xproc_section extraction line shift; call sites themselves unchanged).
+    # Scratch-only probe maintenance.
+    check("V11F-E3 pinned sites are 1827/2056/2078",
+          all(f":{n} " in " ".join(allowed) for n in (1827, 2056, 2078)),
           f"pins={allowed}")
     # zero stray v11f files remain in the tree. The shipped
     # v11f_critic_probes.py is a legitimate repo file (not a stray);

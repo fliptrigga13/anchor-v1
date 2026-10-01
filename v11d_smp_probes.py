@@ -379,13 +379,21 @@ def p35_quantum_boundary_straddle():
     r2 = dep.gateway.submit_intent(**kw)
     check("P35 both sides of the boundary ALLOW (no fail-open, no crash)",
           r1.decision.decision == "ALLOW" and r2.decision.decision == "ALLOW")
-    check("P35 straddle produces two distinct dedup_keys (residual "
-          "confirmed, bounded)",
+    # PENDING LAUREN'S EXPLICIT APPROVAL (v1.1.2 release gate): this probe's
+    # expectation was deliberately changed by harden-C. Old behavior asserted
+    # the documented residual (2 mints per straddle); new behavior asserts the
+    # fix (1 mint via cross-bucket carry-over + capability-liveness).
+    check("P35 straddle produces two distinct dedup_keys (one per bucket; "
+          "harden-C carry-over pins the live decision under the new key)",
           r1.dedup_key != r2.dedup_key,
           f"k1={r1.dedup_key[:12]}… k2={r2.dedup_key[:12]}…")
-    check("P35 straddle mints twice — the documented residual, one extra "
-          "mint per boundary straddle",
-          len(counter.calls) == 2, f"mints={len(counter.calls)}")
+    check("P35 straddle mints ONCE — harden-C carry-over serves the new "
+          "bucket from the live capability (old residual was 2 mints)",
+          len(counter.calls) == 1, f"mints={len(counter.calls)}")
+    check("P35 exactly one capability_id minted across the straddle "
+          "(capability-liveness: the carried decision's capability is live)",
+          len(minted_capability_ids(dep)) == 1,
+          f"capability_ids={minted_capability_ids(dep)}")
     check("P35 each bucket still converges (second submit in the new "
           "bucket hits cache)",
           (lambda: (clock.__setitem__(0, t2 + 0.1),

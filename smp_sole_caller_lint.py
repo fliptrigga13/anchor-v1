@@ -29,6 +29,20 @@ lint fails the build on:
      X.__getattribute__("m") / X.__getattr__("m"), and
      X.__dict__["m"], where "m" names either method. Computed
      (non-constant) names remain the documented dataflow limitation.
+  6. Import-alias resolution (v11h): a per-file map built from
+     ast.Import / ast.ImportFrom (e.g. `from operator import
+     methodcaller as mc` -> mc resolves to operator.methodcaller;
+     `from builtins import getattr as g`; `import operator as op` was
+     already covered via the Attribute form). Bare-Name calls resolved
+     through the map to methodcaller / getattr / __getattribute__ /
+     __getattr__ / eval / exec are flagged exactly like their unaliased
+     forms (the constant-string rules in (3)/(5) apply unchanged).
+     Assignment aliases (ga = getattr) remain the documented L9
+     dataflow limitation — only import statements are resolved
+     (v11f-critic probe C7 pins that behaviour). A name bound by any
+     other statement (assignment, def, lambda arg, ...) shadows the
+     import and is dropped from the map, so local bindings cannot
+     produce false positives.
 
 Scope: the deployment source tree. Skipped (not deployment runtime
 callers under §1.5):
@@ -61,10 +75,26 @@ ALLOW = {"smp_v1_1_prototype.py": "normative §1.5 designated shim layer"}
 # v11g: pins moved 1192/1369/1389 -> 1200/1377/1397 -> 1209/1386/1406 (L8 doc note) (deliberate pin
 # maintenance for the SERIOUS-1 _append-lock line shift; call sites
 # themselves unchanged).
+# harden-A: pins moved 1209/1386/1406 -> 1291/1468/1488 (deliberate pin
+# maintenance for the _replay torn-tail recovery line shift; call sites
+# themselves unchanged).
+# harden-F: pins moved 1291/1468/1488 -> 1313/1490/1510 (deliberate pin
+# maintenance for the clock-watermark line shift; call sites themselves
+# unchanged).
+# harden-C: pins moved 1313/1490/1510 -> 1402/1611/1633 (deliberate pin
+# maintenance for the cross-bucket carry-over line shift; call sites
+# themselves unchanged).
+# harden-G: pins moved 1402/1611/1633 -> 1501/1709/1731 (deliberate pin
+# maintenance for the per-key-lock TTL-eviction line shift; call sites
+# themselves unchanged).
+# harden-B: pins moved 1501/1709/1731 -> 1827/2056/2078 (deliberate pin
+# maintenance for the cross-process xproc_section extraction line shift —
+# submit/resolve critical sections moved into _submit_under_key_lock /
+# _resolve_under_section; the three call sites themselves unchanged).
 PINNED_SITES = frozenset({
-    ("smp_v1_1_prototype.py", 1209, "handle_event"),
-    ("smp_v1_1_prototype.py", 1386, "resolve_pending"),
-    ("smp_v1_1_prototype.py", 1406, "resolve_pending"),
+    ("smp_v1_1_prototype.py", 1827, "handle_event"),
+    ("smp_v1_1_prototype.py", 2056, "resolve_pending"),
+    ("smp_v1_1_prototype.py", 2078, "resolve_pending"),
 })
 
 TARGET_ATTRS = ("handle_event", "resolve_pending")
@@ -98,9 +128,122 @@ EXCLUDE_FILES = {
 EXCLUDE_DIRS = {"redteam2"}
 
 
+class _AliasMapVisitor(ast.NodeVisitor):
+    """v11h: per-file import-alias map.
+
+    Only ast.Import / ast.ImportFrom bindings are resolved — import
+    statements are static and unambiguous. Runtime assignment aliases
+    (``ga = getattr``) remain the documented L9 dataflow limitation
+    (v11f-critic probe C7 pins that behaviour: assignment aliases pass
+    the lint). A name bound by any other statement (assignment,
+    function/class/lambda/comprehension binding) shadows the import and
+    is dropped from the map, so local bindings cannot produce false
+    positives through the alias path.
+    """
+
+    def __init__(self):
+        self.aliases: dict[str, tuple[str, ...]] = {}
+        self.shadow: set[str] = set()
+
+    def visit_Import(self, node: ast.Import):
+        for a in node.names:
+            local = a.asname or a.name.split(".")[0]
+            self.aliases[local] = tuple(a.name.split("."))
+
+    def visit_ImportFrom(self, node: ast.ImportFrom):
+        if node.module is None:
+            return  # relative import — cannot resolve statically
+        for a in node.names:
+            if a.name == "*":
+                continue
+            local = a.asname or a.name.split(".")[0]
+            self.aliases[local] = tuple(node.module.split(".")) + (a.name,)
+
+    # --- shadowing bindings (every non-import binding site) ---
+    def _bind_target(self, target: ast.AST):
+        for n in ast.walk(target):
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                self.shadow.add(n.id)
+            elif isinstance(n, ast.arg):
+                self.shadow.add(n.arg)
+
+    def _bind_args(self, args: ast.arguments):
+        for a in (args.posonlyargs + args.args + args.kwonlyargs):
+            self.shadow.add(a.arg)
+        if args.vararg:
+            self.shadow.add(args.vararg.arg)
+        if args.kwarg:
+            self.shadow.add(args.kwarg.arg)
+
+    def visit_Assign(self, node: ast.Assign):
+        for t in node.targets:
+            self._bind_target(t)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign):
+        self._bind_target(node.target)
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign):
+        self._bind_target(node.target)
+        self.generic_visit(node)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr):
+        self.shadow.add(node.target.id)
+        self.generic_visit(node)
+
+    def visit_For(self, node: ast.For):
+        self._bind_target(node.target)
+        self.generic_visit(node)
+
+    visit_AsyncFor = visit_For
+
+    def visit_With(self, node: ast.With):
+        for item in node.items:
+            if item.optional_vars is not None:
+                self._bind_target(item.optional_vars)
+        self.generic_visit(node)
+
+    visit_AsyncWith = visit_With
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler):
+        if node.name:
+            self.shadow.add(node.name)
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef):
+        self.shadow.add(node.name)
+        self._bind_args(node.args)
+        self.generic_visit(node)
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_ClassDef(self, node: ast.ClassDef):
+        self.shadow.add(node.name)
+        self.generic_visit(node)
+
+    def visit_Lambda(self, node: ast.Lambda):
+        self._bind_args(node.args)
+        self.generic_visit(node)
+
+    def visit_comprehension(self, node: ast.comprehension):
+        self._bind_target(node.target)
+        self.generic_visit(node)
+
+
+def _build_alias_map(tree: ast.Module) -> dict[str, tuple[str, ...]]:
+    """Per-file import-alias map with shadowed names removed."""
+    visitor = _AliasMapVisitor()
+    visitor.visit(tree)
+    return {k: v for k, v in visitor.aliases.items()
+            if k not in visitor.shadow}
+
+
 class _Visitor(ast.NodeVisitor):
-    def __init__(self, rel: str):
+    def __init__(self, rel: str,
+                 aliases: dict[str, tuple[str, ...]] | None = None):
         self.rel = rel
+        self._aliases = aliases or {}
         self.sites: list[tuple[int, str]] = []       # (lineno, attr)
         self.indirect: list[tuple[int, str]] = []    # (lineno, detail)
         self.bare: list[tuple[int, str]] = []        # (lineno, attr)
@@ -114,17 +257,61 @@ class _Visitor(ast.NodeVisitor):
         # bare-reference pass does not double-report a pinned call site.
         self._call_attr_ids: set[int] = set()
 
-    @staticmethod
-    def _getattr_target(node: ast.AST) -> str | None:
-        """If node is getattr(X, "<target-method>"), return the method."""
-        if (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id == "getattr"
-                and len(node.args) >= 2
-                and isinstance(node.args[1], ast.Constant)
-                and node.args[1].value in TARGET_ATTRS):
-            return node.args[1].value
-        return None
+    def _call_kind(self, func: ast.AST) -> tuple[str | None, str]:
+        """Invocation kind of a call func, resolving bare Names through
+        the per-file import-alias map. Returns (kind, alias_note)."""
+        if isinstance(func, ast.Attribute):
+            return func.attr, ""
+        if isinstance(func, ast.Name):
+            alias = self._aliases.get(func.id)
+            if alias is not None:
+                return (alias[-1],
+                        f" [import alias {func.id} -> {'.'.join(alias)}]")
+            return func.id, ""
+        return None, ""
+
+    def visit_Call(self, node: ast.Call):
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr in TARGET_ATTRS:
+            if not self._is_self_call_to_own_method(func):
+                self.sites.append((func.lineno, func.attr))
+                self._call_attr_ids.add(id(func))
+        else:
+            # Immediately-invoked indirection: getattr(X, "m")(...) — the
+            # indirection call is the func; its args carry the name.
+            inner = func if isinstance(func, ast.Call) else node
+            kind, via = (self._call_kind(inner.func)
+                        if isinstance(inner, ast.Call) else (None, ""))
+            if kind == "getattr":
+                # getattr indirection: assigned (f = getattr(X, "m")) or
+                # immediately invoked (getattr(X, "m")(...)).
+                if (len(inner.args) >= 2
+                        and isinstance(inner.args[1], ast.Constant)
+                        and inner.args[1].value in TARGET_ATTRS):
+                    self.indirect.append(
+                        (node.lineno,
+                         f"getattr(..., {inner.args[1].value!r}){via}"))
+            elif kind in ("methodcaller", "__getattribute__",
+                          "__getattr__"):
+                # Constant-string target-name indirections: computed
+                # (non-constant) names remain the documented dataflow
+                # limitation and are NOT flagged.
+                if (inner.args
+                        and isinstance(inner.args[0], ast.Constant)
+                        and inner.args[0].value in TARGET_ATTRS):
+                    self.indirect.append(
+                        (node.lineno,
+                         f"{kind}(..., {inner.args[0].value!r}){via}"))
+            elif kind in ("eval", "exec"):
+                for arg in inner.args:
+                    if (isinstance(arg, ast.Constant)
+                            and isinstance(arg.value, str)
+                            and any(a in arg.value
+                                    for a in TARGET_ATTRS)):
+                        self.indirect.append(
+                            (node.lineno,
+                             f"{kind}() naming a target method{via}"))
+        self.generic_visit(node)
 
     def visit_ClassDef(self, node: ast.ClassDef):
         defined = {n.name for n in node.body
@@ -139,59 +326,6 @@ class _Visitor(ast.NodeVisitor):
                 and func.value.id in ("self", "cls")
                 and bool(self._class_methods)
                 and func.attr in self._class_methods[-1])
-
-    @staticmethod
-    def _const_string_target_call(node: ast.Call) -> tuple[str, str] | None:
-        """If node is methodcaller("m", ...), X.__getattribute__("m") or
-        X.__getattr__("m") with "m" a constant target-method name, return
-        (invocation-kind, method). Computed (non-constant) names are the
-        documented dataflow limitation and are NOT flagged."""
-        func = node.func
-        if isinstance(func, ast.Attribute):
-            kind = func.attr
-        elif isinstance(func, ast.Name):
-            kind = func.id
-        else:
-            return None
-        if kind not in ("methodcaller", "__getattribute__", "__getattr__"):
-            return None
-        if (node.args and isinstance(node.args[0], ast.Constant)
-                and node.args[0].value in TARGET_ATTRS):
-            return kind, node.args[0].value
-        return None
-
-    def visit_Call(self, node: ast.Call):
-        func = node.func
-        if isinstance(func, ast.Attribute) and func.attr in TARGET_ATTRS:
-            if not self._is_self_call_to_own_method(func):
-                self.sites.append((func.lineno, func.attr))
-                self._call_attr_ids.add(id(func))
-        else:
-            # getattr indirection: assigned (f = getattr(X, "m")) or
-            # immediately invoked (getattr(X, "m")(...)).
-            target = self._getattr_target(func)
-            if target is None:
-                target = self._getattr_target(node)
-            if target is not None:
-                self.indirect.append(
-                    (node.lineno, f"getattr(..., {target!r})"))
-            else:
-                strcall = self._const_string_target_call(node)
-                if strcall is not None:
-                    kind, method = strcall
-                    self.indirect.append(
-                        (node.lineno, f"{kind}(..., {method!r})"))
-                elif (isinstance(func, ast.Name)
-                        and func.id in ("eval", "exec")):
-                    for arg in node.args:
-                        if (isinstance(arg, ast.Constant)
-                                and isinstance(arg.value, str)
-                                and any(a in arg.value
-                                        for a in TARGET_ATTRS)):
-                            self.indirect.append(
-                                (node.lineno,
-                                 f"{func.id}() naming a target method"))
-        self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute):
         # v11g (SERIOUS-2a): a bare reference to a target method —
@@ -264,7 +398,7 @@ def check_tree(root: Path) -> tuple[list[str], list[tuple[str, int, str]]]:
         except (OSError, SyntaxError) as exc:
             violations.append(f"{rel}: unreadable ({exc})")
             continue
-        visitor = _Visitor(rel)
+        visitor = _Visitor(rel, _build_alias_map(tree))
         visitor.visit(tree)
         for lineno, attr in visitor.sites:
             if rel in ALLOW:
