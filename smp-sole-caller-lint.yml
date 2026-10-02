@@ -1,0 +1,34 @@
+name: smp-sole-caller-lint
+
+# v11e (S3): CI enforcement of the normative §1.5 sole-caller invariant —
+# the deployment SmpGateway is the sole deployment caller of
+# AcsGuardian.handle_event / AcsGuardian.resolve_pending, with the exact
+# call sites pinned in smp_sole_caller_lint.py.
+#
+# Fails the build on any new or unpinned call site, import-alias evasions
+# (v11h), or indirect invocations of either method anywhere in scope.
+
+on:
+  push:
+    branches: [anchor-v1]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sole-caller:
+    name: sole-caller lint (normative §1.5)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Run sole-caller lint
+        run: python3 smp_sole_caller_lint.py --root .
