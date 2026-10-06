@@ -41,7 +41,7 @@ jobs:
       - name: Collected-test floor
         run: |
           n=$(python -m pytest --collect-only -q 2>/dev/null | tail -1 | grep -oE '^[0-9]+')
-          test "$n" -ge 1044 || { echo "test count regression: ${n:-missing} < 1044"; exit 1; }
+          test "$n" -ge 1083 || { echo "test count regression: ${n:-missing} < 1083"; exit 1; }
 
       - name: Pytest
         run: python -m pytest -q
