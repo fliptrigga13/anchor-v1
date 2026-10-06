@@ -21,8 +21,9 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 # Ensure anchor_v1 and tests are on path
-sys.path.insert(0, r"C:\Users\fyou1\anchor-v1\repo\src")
-sys.path.insert(0, r"C:\Users\fyou1\anchor-v1\repo")
+_REPO = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_REPO, "src"))
+sys.path.insert(0, _REPO)
 
 from anchor_v1.acs_guardian import (
     AcsGuardian,

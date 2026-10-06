@@ -2,7 +2,22 @@
 
 An open, model-agnostic runtime governor for AI agents. One invariant: no consequential autonomous action occurs unless a deterministic authority authorized that exact effect, through an unforgeable tightly-bounded capability; execution happens through an enforcement point the agent cannot bypass; the chain is independently verifiable later. A hardened ACS-compatible Guardian decides, every ALLOW mints a one-use holder-of-key capability bound to the exact action digest, a credential-brokering PEP executes, and SCITT-compatible (RFC 9421/9943) evidence makes the whole trail verifiable offline. Pure Python, stdlib + `cryptography` + `pydantic` only.
 
-Release `v1.0.0` (annotated tag on commit `b1949cc`). This is a research-grade artifact: the limitations below are real and stated, not footnoted.
+Current version `1.1.0` (`pyproject.toml`; latest tag `v1.1.2`, first release `v1.0.0` on commit `b1949cc`). This is a research-grade artifact: the limitations below are real and stated, not footnoted.
+
+**Who it's for:** people building agent runtimes, MCP gateways, or payment/ops agents who need a deny-by-default authorization layer that can be audited offline, and security reviewers who want to break one.
+
+## See it work in 60 seconds
+
+```sh
+git clone https://github.com/fliptrigga13/anchor-v1 && cd anchor-v1
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e ".[test]"
+python reality_trial.py
+```
+
+The trial runs the full Action → Authority → Capability → Enforcement → Effect → Proof chain on real shell actions. It replays a consumed capability and tampers with command parameters (both refused), then verifies the evidence bundle offline. Expected last line: `REALITY TRIAL PASSED`.
+
+**Feedback wanted:** if you find a bypass, open an issue with the test vector. Each named guarantee below has its own.
 
 ## Named guarantees
 
@@ -36,7 +51,7 @@ Twelve named guarantees, each with threat / precondition / attack / invariant / 
 
 ## Test results
 
-1043 passed, 1 xfailed (1044 collected). Per wave: Waves 0–4 (authority core: deterministic policy evaluation, one-use capabilities, credential-brokering PEP, SCITT transparency log with 9 statement types) — 703 green; Wave 5 (enterprise adapters: native + Cedar/Rego-subset policy providers, SPIFFE/OIDC/Entra/Okta consume-only identity adapters, WebAuthn + m-of-n quorum step-up, `did:key` agent identity) — 1005/1005, 100+ adversarial attacks across 5 rounds with 18 bypasses found and closed, zero open; Wave 6 (conformance) — 1017/1017, 9/9 mutation checks; Wave 7 (Guardian↔PEP presented-envelope integration) — 1030 green, independent red team blocked 11/11 attacks; red-team-2 added 13 regression tests. Reality trial: 5/5 real actions governed end-to-end (file write, append, git init/add/commit), 4/4 live bypass probes denied, 15/15 SCITT statements verified offline, tampered evidence rejected.
+Current suite: 1082 passed, 1 xfailed (1083 collected, Python 3.12/3.13). Historical per-wave counts: Waves 0–4 (authority core: deterministic policy evaluation, one-use capabilities, credential-brokering PEP, SCITT transparency log with 9 statement types) — 703 green; Wave 5 (enterprise adapters: native + Cedar/Rego-subset policy providers, SPIFFE/OIDC/Entra/Okta consume-only identity adapters, WebAuthn + m-of-n quorum step-up, `did:key` agent identity) — 1005/1005, 100+ adversarial attacks across 5 rounds with 18 bypasses found and closed, zero open; Wave 6 (conformance) — 1017/1017, 9/9 mutation checks; Wave 7 (Guardian↔PEP presented-envelope integration) — 1030 green, independent red team blocked 11/11 attacks; red-team-2 added 13 regression tests. Reality trial: 5/5 real actions governed end-to-end (file write, append, git init/add/commit), 4/4 live bypass probes denied, 15/15 SCITT statements verified offline, tampered evidence rejected.
 
 ## Honest limitations
 
@@ -65,4 +80,4 @@ Or, from the repo root with an existing venv:
 .venv/bin/pytest -q
 ```
 
-Expected result: `1043 passed, 1 xfailed` (the xfail is the double-mint tripwire, limitation 5). The same command is what `.github/workflows/ci.yml` runs. `pytest` config lives in `pyproject.toml` (`pythonpath = ["src"]`, `testpaths = ["tests"]`, `addopts = "-ra"`).
+Expected result: `1082 passed, 1 xfailed` (the xfail is the double-mint tripwire, limitation 5). The same command is what `.github/workflows/ci.yml` runs. `pytest` config lives in `pyproject.toml` (`pythonpath = ["src"]`, `testpaths = ["tests"]`, `addopts = "-ra"`).

@@ -310,7 +310,12 @@ class TestStalenessDuals:
         cose, payload = issue_and_register(
             store, issuer, holder, env.action_digest, staleness=0,
         )
-        store.sync_revocations()  # make the view fresh
+        # Pin the clock: sync and consume at the same instant, so staleness is
+        # exactly 0. With wall-clock time the gap is a few microseconds, which
+        # exceeds a 0s bound and made this test fail nondeterministically.
+        from datetime import datetime, timezone
+        moment = datetime.now(timezone.utc)
+        store.sync_revocations(now=moment.timestamp())  # make the view fresh
         proof = make_holder_proof(holder, payload.capability_id, challenge)
         out = store.consume_capability(
             capability_cose=cose,
@@ -318,6 +323,7 @@ class TestStalenessDuals:
             challenge=challenge,
             trusted_issuers=trusted,
             envelope=env,
+            now=moment,
         )
         assert out.capability_id == payload.capability_id
 
